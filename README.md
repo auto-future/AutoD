@@ -1,10 +1,4 @@
-# 自主智能体（Autonomous Agent）设计思路
-
-> 本文档整理自 `auto-code-manager/server` 的自主智能体实现，覆盖整体架构、主循环、Step 协议、工具体系、上下文管理、语义检索与持久化等核心设计。
->
-> 源码位置：`server/src/services/chat/`、`server/src/services/mcp/`、`server/src/services/contextManager.ts`、`server/src/prompts/agent-system.md`
-
----
+# 最简自主智能体（Autonomous Agent）设计思路
 
 ## 一、设计目标
 
