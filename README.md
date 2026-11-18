@@ -51,23 +51,6 @@
   - 工具向量索引（toolIndex.ts）-> 语义检索
 ```
 
-### 模块职责
-
-| 模块 | 职责 |
-|---|---|
-| `chat/index.ts` | 对话服务编排：非流式 `chatCompletion` / 流式 `chatStream`，事件流组装与持久化 |
-| `chat/agentLoop.ts` | 自主智能体主循环：决策-行动-反思，step 执行与结果回填 |
-| `chat/stepParser.ts` | Step 协议解析：step 代码块、step 标签、裸 JSON、DSML 特殊 token 兼容 |
-| `chat/prompt.ts` | 提示词构建：系统提示、step 协议说明、工具清单渲染、消息组装 |
-| `chat/search.ts` | 多维度检索：项目/代码/修改记录/历史需求/工具/服务器 + searchStep |
-| `chat/types.ts` | 公共类型与 `AgentEventStream` 异步事件队列 |
-| `contextManager.ts` | 上下文长度管理：token 估算、单条截断、步骤归档、请求前压缩 |
-| `mcp/manager.ts` | 工具注册、工具名校验、统一执行入口、内置能力分发 |
-| `mcp/toolIndex.ts` | 工具向量索引：把可执行工具向量化，支持语义检索 |
-| `prompts/agent-system.md` | 系统提示词模板（从文件动态加载，支持热更新） |
-
----
-
 ## 三、核心设计一：Step 文本协议（替代原生 tool_calls）
 
 ### 3.1 为什么不用原生 tool_calls
@@ -86,27 +69,6 @@
 
 一次回复可包含多个 step 块，按顺序依次执行。
 
-### 3.3 解析器兼容策略（stepParser.ts）
-
-`parseStepsFromMarkdown` 按优先级依次尝试：
-
-1. **DSML 特殊 token**（DeepSeek 原生格式）—— 优先拦截，兼容全角竖线与全角尖括号
-2. **step 围栏代码块**（标准格式）
-3. **step XML 标签**（模型常见误用）
-4. **json 围栏但内容是 step 对象**（误用 json 标记）
-5. **全文正则兜底**：step 标签未闭合、被截断、裸 JSON 对象（括号配平扫描）
-
-解析结果：`{ steps: ParsedStep[], text: string }`，`text` 为剔除 step 块后的纯文本（用于最终回答）。
-
-### 3.4 格式纠错机制
-
-模型多轮后可能回退到原生特殊 token 格式。`agentLoop` 检测到 `hasSpecialTokenResidue` 时：
-
-- 不把它当作最终回答（否则用户会看到一串特殊 token）
-- 最多重试 2 次，注入纠正提示要求改用 step 格式
-- 仍失败则 `stripDsmlResidue` 清理残留后作为最终回答
-
----
 
 ## 四、核心设计二：智能体主循环（agentLoop.ts）
 
@@ -192,7 +154,6 @@ interface AgentEvent {
     executeTool    统一执行入口
 
 - 内置能力工具（由 manager 内部实现，经 executeTool 调用）
-    chain_*        调用链路图
     batch_*        批量分析（大文件异步分块）
     ssh_*          SSH 远程执行
     file_profile   文件画像
@@ -273,18 +234,6 @@ executeTool(mcp_tool_name, mcp_inputs)
 
 > 【步骤归档提示】由于上下文长度限制，本次对话中较早的 N 条步骤记录（第 1 ~ M 轮）已从上下文中移除，并完整保存到数据库。如需回忆请调用 searchStep 工具检索。
 
-### 6.5 一个必须避免的 Bug
-
-`ensureContextWithinLimit` 是**原地修改并返回同一数组引用**。绝不能写：
-
-```typescript
-workingMessages.length = 0
-workingMessages.push(...compressed)   // 错误：compressed === workingMessages 时会被清空
-```
-
-否则上下文被清空 -> 请求发出空 messages -> `400 Empty input messages`。正确写法是直接赋值 `workingMessages = compressed`。
-
----
 
 ## 七、核心设计五：searchStep 步骤语义检索
 
@@ -337,15 +286,9 @@ searchStep(query, sessionId, limit=8, roundTo?)
 - 流式文本增量更新助手消息内容（每 500 字符或遇换行保存一次）
 - 最终内容做 `stripDsmlResidue` 兜底清理
 
-### 8.3 阶段二前的二次压缩
-
-`agentLoop` 在 `finish_task` 时直接 break 返回 `workingMessages`，那一轮 append 的 assistant/tool 消息**没经过长度检查**。因此进入文本流阶段前必须再压一次，否则会重现「后端限制 131072 却发出 180 万 token 请求」的问题。
-
----
-
 ## 九、系统提示词设计
 
-系统提示词模板位于 `server/src/prompts/agent-system.md`，由 `prompt.ts` 的 `buildAgentSystemPrompt` 动态加载（基于 mtime 缓存，文件修改后自动热更新）。
+系统提示词模板位于 `agent-system.md`，动态加载（基于 mtime 缓存，文件修改后自动热更新）。
 
 ### 9.1 组成结构
 
@@ -387,18 +330,3 @@ agent-system.md（基础模板）
 | 用户请求注入 system prompt | 多轮观察后不丢失原始目标 |
 
 ---
-
-## 附：关键文件索引
-
-| 文件 | 说明 |
-|---|---|
-| `src/services/chat/agentLoop.ts` | 智能体主循环 |
-| `src/services/chat/stepParser.ts` | Step 协议解析 |
-| `src/services/chat/prompt.ts` | 提示词构建 |
-| `src/services/chat/search.ts` | 多维度检索 + searchStep |
-| `src/services/chat/index.ts` | 对话服务编排 |
-| `src/services/chat/types.ts` | 类型与事件流 |
-| `src/services/contextManager.ts` | 上下文压缩 |
-| `src/services/mcp/manager.ts` | 工具管理与执行 |
-| `src/services/mcp/toolIndex.ts` | 工具向量索引 |
-| `src/prompts/agent-system.md` | 系统提示词模板 |
